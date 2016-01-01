@@ -16,6 +16,9 @@ typedef unsigned char uint8;
 
 #define NOINLINE __attribute__ ((noinline))
 
+#define CRYSTAL_FREQ 26000000
+#define CPU_CLK_FREQ (80*(CRYSTAL_FREQ)/16000000)
+
 #define ROM_MAGIC	   0xe9
 #define ROM_MAGIC_NEW1 0xea
 #define ROM_MAGIC_NEW2 0x04
@@ -23,8 +26,11 @@ typedef unsigned char uint8;
 #define TRUE 1
 #define FALSE 0
 
-// buffer size, must be at least 0x10 (size of rom_header_new structure)
+// buffer size, must be at least sizeof(rom_header_new)
 #define BUFFER_SIZE 0x100
+
+// Small read offset for header at beginning of image
+#define IMAGE_READ_OFFSET (4)
 
 // esp8266 built in rom functions
 extern uint32 SPIRead(uint32 addr, void *outptr, uint32 len);
@@ -36,7 +42,6 @@ extern void ets_memset(void*, uint8, uint32);
 extern void ets_memcpy(void*, const void*, uint32);
 
 // functions we'll call by address
-typedef void stage2a(uint32);
 typedef void usercode(void);
 
 // standard rom header
@@ -63,10 +68,16 @@ typedef struct {
 	uint8 count; // second magic for new header
 	uint8 flags1;
 	uint8 flags2;
-	uint32 entry;
+	usercode* entry;
 	// new type rom, lib header
 	uint32 add; // zero
 	uint32 len; // length of irom section
 } rom_header_new;
+
+typedef enum {
+  SPI_FLASH_RESULT_OK,
+  SPI_FLASH_RESULT_ERR,
+  SPI_FLASH_RESULT_TIMEOUT,
+} SpiFlashOpResult;
 
 #endif

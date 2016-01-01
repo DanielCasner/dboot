@@ -1,59 +1,28 @@
 #
 # Makefile for rBoot
-# https://github.com/raburton/esp8266
 #
 
-ESPTOOL2 ?= ../esptool2/esptool2
+SDK_BASE ?= /opt/esp-open-sdk/sdk
 
 RBOOT_BUILD_BASE ?= build
 RBOOT_FW_BASE    ?= firmware
 
-ifndef XTENSA_BINDIR
 CC := xtensa-lx106-elf-gcc
 LD := xtensa-lx106-elf-gcc
-else
-CC := $(addprefix $(XTENSA_BINDIR)/,xtensa-lx106-elf-gcc)
-LD := $(addprefix $(XTENSA_BINDIR)/,xtensa-lx106-elf-gcc)
-endif
+OBJCOPY = xtensa-lx106-elf-objcopy
+OBJDUMP = xtensa-lx106-elf-objdump
 
-CFLAGS    = -Os -O3 -Wpointer-arith -Wundef -Werror -Wl,-EL -fno-inline-functions -nostdlib -mlongcalls -mtext-section-literals  -D__ets__ -DICACHE_FLASH
-LDFLAGS   = -nostdlib -Wl,--no-check-sections -u call_user_start -Wl,-static
-LD_SCRIPT = eagle.app.v6.ld
+CFLAGS    = -Os -Wpointer-arith -Wundef -Werror -Wl,-EL -fno-inline-functions -nostdlib -mlongcalls -mtext-section-literals  -D__ets__ -DICACHE_FLASH
+LDFLAGS   = -nostdlib -Wl,--no-check-sections -u call_user_start -Wl,-static -L $(SDK_BASE)/ld/
+LD_SCRIPT = rboot.ld
 
-E2_OPTS = -quiet -bin -boot0
+BOOT=0
+SPI_FREQ_DIV?=15 # 80MHz
+SPI_MODE?=0      # QSPI
+SPI_SIZE_MAP?=3  # 1MB images
+flash?=2048      # 2MB total flash
+addr?=0x00000    # Bootloader goes at the very beginning of flash
 
-ifeq ($(RBOOT_BIG_FLASH),1)
-	CFLAGS += -DBOOT_BIG_FLASH
-endif
-ifeq ($(RBOOT_INTEGRATION),1)
-	CFLAGS += -DRBOOT_INTEGRATION
-endif
-ifeq ($(SPI_SIZE), 256K)
-	E2_OPTS += -256
-else ifeq ($(SPI_SIZE), 512K)
-	E2_OPTS += -512
-else ifeq ($(SPI_SIZE), 1M)
-	E2_OPTS += -1024
-else ifeq ($(SPI_SIZE), 2M)
-	E2_OPTS += -2048
-else ifeq ($(SPI_SIZE), 4M)
-	E2_OPTS += -4096
-endif
-ifeq ($(SPI_MODE), qio)
-	E2_OPTS += -qio
-else ifeq ($(SPI_MODE), dio)
-	E2_OPTS += -dio
-else ifeq ($(SPI_MODE), qout)
-	E2_OPTS += -qout
-else ifeq ($(SPI_MODE), dout)
-	E2_OPTS += -dout
-endif
-
-RBOOT_EXTRA_INCDIR := $(addprefix -I,$(RBOOT_EXTRA_INCDIR))
-
-.SECONDARY:
-
-#all: $(RBOOT_BUILD_BASE) $(RBOOT_FW_BASE) $(RBOOT_FW_BASE)/rboot.bin $(RBOOT_FW_BASE)/testload1.bin $(RBOOT_FW_BASE)/testload2.bin
 all: $(RBOOT_BUILD_BASE) $(RBOOT_FW_BASE) $(RBOOT_FW_BASE)/rboot.bin
 
 $(RBOOT_BUILD_BASE):
@@ -65,30 +34,29 @@ $(RBOOT_FW_BASE):
 $(RBOOT_BUILD_BASE)/rboot-stage2a.o: rboot-stage2a.c rboot-private.h rboot.h
 	@echo "CC $<"
 	@$(CC) $(CFLAGS) $(RBOOT_EXTRA_INCDIR) -c $< -o $@
-	
-$(RBOOT_BUILD_BASE)/rboot-stage2a.elf: $(RBOOT_BUILD_BASE)/rboot-stage2a.o
-	@echo "LD $@"
-	@$(LD) -Trboot-stage2a.ld $(LDFLAGS) -Wl,--start-group $^ -Wl,--end-group -o $@
 
-$(RBOOT_BUILD_BASE)/rboot-hex2a.h: $(RBOOT_BUILD_BASE)/rboot-stage2a.elf
-	@echo "E2 $@"
-	@$(ESPTOOL2) -quiet -header $< $@ .text
-
-$(RBOOT_BUILD_BASE)/rboot.o: rboot.c rboot-private.h rboot.h $(RBOOT_BUILD_BASE)/rboot-hex2a.h
+$(RBOOT_BUILD_BASE)/rboot.o: rboot.c rboot-private.h rboot.h build/version.h
 	@echo "CC $<"
 	@$(CC) $(CFLAGS) -I$(RBOOT_BUILD_BASE) $(RBOOT_EXTRA_INCDIR) -c $< -o $@
 
 $(RBOOT_BUILD_BASE)/%.o: %.c %.h
 	@echo "CC $<"
-	@$(CC) $(CFLAGS) $(RBOOT_EXTRA_INCDIR) -c $< -o $@
+	@$(CC) $(CFLAGS) -c $< -o $@
 
 $(RBOOT_BUILD_BASE)/%.elf: $(RBOOT_BUILD_BASE)/%.o
 	@echo "LD $@"
-	@$(LD) -T$(LD_SCRIPT) $(LDFLAGS) -Wl,--start-group $^ -Wl,--end-group -o $@
+	@$(LD) -T$(LD_SCRIPT) $(LDFLAGS) -Wl,--start-group $^ -Wl,--end-group -Xlinker --Map=esp.map -o $@
 
 $(RBOOT_FW_BASE)/%.bin: $(RBOOT_BUILD_BASE)/%.elf
-	@echo "E2 $@"
-	@$(ESPTOOL2) $(E2_OPTS) $< $@ .text .rodata
+	@echo "GEN APPBIN $@"
+	@$(OBJCOPY) --only-section .text       -O binary $< eagle.app.v6.text.bin
+	@$(OBJCOPY) --only-section .data       -O binary $< eagle.app.v6.data.bin
+	@$(OBJCOPY) --only-section .rodata     -O binary $< eagle.app.v6.rodata.bin
+	@$(OBJCOPY) --only-section .irom0.text -O binary $< eagle.app.v6.irom0text.bin
+	@$(OBJCOPY) --only-section .iram2.text -O binary $< eagle.app.v6.iram2text.bin
+	@python2 gen_appbin.py $< $(BOOT) $(SPI_MODE) $(SPI_FREQ_DIV) $(SPI_SIZE_MAP)
+	@mv eagle.app.flash.bin "$@"
+	@mv eagle.app.v6.*.bin build/
 
 clean:
 	@echo "RM $(RBOOT_BUILD_BASE) $(RBOOT_FW_BASE)"
