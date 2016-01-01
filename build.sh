@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 export PATH=/opt/xtensa-lx106-elf/bin:$PATH
-SDK_BASE=
+SDK_BASE=/opt/Expressif/sdk-1.5.0
 
 function genVersionFile {
   VersionFile=$1
